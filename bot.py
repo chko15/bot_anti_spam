@@ -7,10 +7,14 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from collections import defaultdict
 
+# ================= LOAD ENV =================
+
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-LOG_CHANNEL_ID = 1466507799361229003  # GANTI DENGAN ID CHANNEL LOG
+LOG_CHANNEL_ID = 1466507799361229003# <<< GANTI INI
+
+# ================= INTENTS =================
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -21,7 +25,12 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ================= CONFIG =================
 
 SCAM_KEYWORDS = [
-    "mrbeast", "giveaway", "free nitro", "claim", "airdrop"
+    "mrbeast",
+    "giveaway",
+    "free nitro",
+    "claim",
+    "airdrop",
+    "discord nitro"
 ]
 
 WHITELIST_DOMAINS = [
@@ -34,8 +43,8 @@ WHITELIST_DOMAINS = [
 
 URL_REGEX = re.compile(r"https?://\S+")
 
-SPAM_LIMIT = 3      # jumlah pesan
-SPAM_SECONDS = 10   # dalam detik
+SPAM_LIMIT = 3       # pesan
+SPAM_SECONDS = 10    # detik
 
 user_message_log = defaultdict(list)
 
@@ -45,16 +54,27 @@ def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKD", text)
     text = text.encode("ascii", "ignore").decode("ascii")
     text = text.lower()
-    text = text.replace("rn", "m")  # trick scam
+    text = text.replace("rn", "m")
     return text
 
 def is_whitelisted(url: str) -> bool:
     return any(domain in url for domain in WHITELIST_DOMAINS)
 
-async def log_action(guild, content):
+async def log_action_embed(guild, title, color, fields):
     channel = guild.get_channel(LOG_CHANNEL_ID)
-    if channel:
-        await channel.send(content)
+    if not channel:
+        return
+
+    embed = discord.Embed(
+        title=title,
+        color=color,
+        timestamp=datetime.utcnow()
+    )
+
+    for name, value in fields:
+        embed.add_field(name=name, value=value, inline=False)
+
+    await channel.send(embed=embed)
 
 # ================= EVENTS =================
 
@@ -68,58 +88,72 @@ async def on_message(message):
         return
 
     now = datetime.utcnow()
+
+    # ================= RATE LIMIT =================
     logs = user_message_log[message.author.id]
     logs.append(now)
     user_message_log[message.author.id] = [
         t for t in logs if now - t < timedelta(seconds=SPAM_SECONDS)
     ]
 
-    # 🚫 RATE LIMIT
     if len(user_message_log[message.author.id]) >= SPAM_LIMIT:
         await message.delete()
         await message.author.timeout(
             timedelta(minutes=10),
             reason="Spam detected"
         )
-        await log_action(
+
+        await log_action_embed(
             message.guild,
-            f"⏱️ **Spam Timeout** {message.author} in {message.channel}"
+            "⏱️ SPAM DETECTED",
+            discord.Color.orange(),
+            [
+                ("User", str(message.author)),
+                ("Channel", message.channel.mention),
+                ("Action", "Timeout 10 minutes")
+            ]
         )
         return
 
-    content = normalize(message.content)
-
-    # 🔗 LINK CHECK
+    # ================= LINK SCAN =================
+    content_normalized = normalize(message.content)
     urls = URL_REGEX.findall(message.content)
+
     if urls:
         for url in urls:
             if is_whitelisted(url):
                 continue
 
-            if any(keyword in content for keyword in SCAM_KEYWORDS):
+            if any(keyword in content_normalized for keyword in SCAM_KEYWORDS):
                 await message.delete()
 
-                # 👶 AKUN BARU
+                # akun baru → ban
                 if message.author.created_at > now - timedelta(days=7):
-                    await message.author.ban(reason="Scam link (auto-ban)")
-                    action = "🔨 **Auto-BAN**"
+                    await message.author.ban(reason="Scam link detected")
+                    action = "Auto-BAN"
                 else:
                     await message.author.timeout(
                         timedelta(minutes=30),
-                        reason="Scam link"
+                        reason="Scam link detected"
                     )
-                    action = "⏱️ **Timeout**"
+                    action = "Timeout 30 minutes"
 
-                await log_action(
+                await log_action_embed(
                     message.guild,
-                    f"""{action}
-👤 User: {message.author}
-📍 Channel: {message.channel}
-🔗 Link: `{url}`
-📝 Content: `{message.content}`"""
+                    "🚨 SCAM LINK DETECTED",
+                    discord.Color.red(),
+                    [
+                        ("User", str(message.author)),
+                        ("Channel", message.channel.mention),
+                        ("Action", action),
+                        ("Link", url),
+                        ("Message", message.content[:1024])
+                    ]
                 )
                 return
 
     await bot.process_commands(message)
 
-bot.run(TOKEN)
+# ================= RUN =================
+
+bot.run(TOKEN)
